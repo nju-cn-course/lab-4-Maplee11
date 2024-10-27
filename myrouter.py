@@ -56,6 +56,9 @@ class Arp_table:
 
 class ForwardingTable:
     def __init__(self, net: switchyard.llnetbase.LLNetBase):
+        intfname2mac = {}
+        for intf in net.interfaces():
+            intfname2mac[intf.name] = intf.ethaddr
         self.table = []
         with open("forwarding_table.txt", "r", encoding="UTF-8") as f:
             for line in f:
@@ -65,7 +68,7 @@ class ForwardingTable:
                     "ip": IPv4Address(ipPrefix),
                     "mask": IPv4Address(mask),
                     "nxtHop": IPv4Address(nxtHop),
-                    "intfname": intfname
+                    "intfname": intfname2mac[intfname]
                 })
         for intf in net.interfaces():
             self.table.append({
@@ -149,6 +152,8 @@ class Router(object):
         print(f"[Dst]: IP={dst_ip} MAC={dst_mac}")
 
         intf_mac, nxtHop = self.ft.lookup(dst_ip)
+        if str(nxtHop) != "0.0.0.0":
+            dst_ip = nxtHop
         print(f"[Hit]: dst ip {dst_ip} goes to {intf_mac}")
         if self.arp_table.has_ip(dst_ip):
             eth = packet.get_header(Ethernet)
@@ -159,6 +164,10 @@ class Router(object):
             icmp = packet.get_header(ICMP)
             self.send(self.mac2name[intf_mac], eth + ipv4hdr + icmp)
         else:
+            # check if the arp request has been sent
+            if any(event.query_ip == dst_ip for event in self.queue):
+                return
+
             ether = Ethernet()
             ether.src = intf_mac
             ether.dst = "ff:ff:ff:ff:ff:ff"
@@ -211,7 +220,6 @@ class Router(object):
                 if event.query_ip == src_ip:
                     outIntf, pkt = event.resolve(arp)
                     self.send(outIntf, pkt)
-                    return
         else:
             print("Not arp request or reply!!!")
             assert(0)
