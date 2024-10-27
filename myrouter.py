@@ -106,6 +106,8 @@ class UnfinishedArp:
         self.query_ip = query_ip
         self.outIntf = outIntf
         self.outIntf_mac = outIntf_mac
+        self.query_cnt = 1
+        self.last_query = time.time()
 
     
     def resolve(self, arp_reply):
@@ -152,6 +154,8 @@ class Router(object):
         print(f"[Dst]: IP={dst_ip} MAC={dst_mac}")
 
         intf_mac, nxtHop = self.ft.lookup(dst_ip)
+        if intf_mac == None and nxtHop == None:
+            return
         if str(nxtHop) != "0.0.0.0":
             dst_ip = nxtHop
         print(f"[Hit]: dst ip {dst_ip} goes to {intf_mac}")
@@ -167,7 +171,6 @@ class Router(object):
             # check if the arp request has been sent
             if any(event.query_ip == dst_ip for event in self.queue):
                 return
-
             ether = Ethernet()
             ether.src = intf_mac
             ether.dst = "ff:ff:ff:ff:ff:ff"
@@ -220,6 +223,7 @@ class Router(object):
                 if event.query_ip == src_ip:
                     outIntf, pkt = event.resolve(arp)
                     self.send(outIntf, pkt)
+                    self.queue.remove(event)
         else:
             print("Not arp request or reply!!!")
             assert(0)
@@ -234,11 +238,23 @@ class Router(object):
             self.handle_none_arp(ifaceName, packet)
 
 
+    def process_queue(self):
+        for event in self.queue:
+            if time.time() - event.last_query > 1:
+                if event.query_cnt >= 5:
+                    self.queue.remove(event)
+                else:
+                    self.send(event.outIntf, event.arp_packet)
+                    event.last_query = time.time()
+                    event.query_cnt += 1
+
+
     def start(self):
         '''A running daemon of the router.
         Receive packets until the end of time.
         '''
         while True:
+            self.process_queue()
             try:
                 recv = self.net.recv_packet(timeout=1.0)
             except NoPackets:
