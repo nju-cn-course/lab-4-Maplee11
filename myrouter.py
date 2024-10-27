@@ -88,7 +88,7 @@ class ForwardingTable:
         for entry in self.table:
             prefix = entry["ip"]
             mask = entry["mask"]
-            prefix_len = IPv4Network(f"192.168.0.0/{str(mask)}").prefixlen
+            prefix_len = IPv4Network(f"192.0.0.0/{str(mask)}").prefixlen
             if (int(mask) & int(ip)) == (int(mask) & int(prefix)):
                 if prefix_len > max_prefix:
                     max_prefix = prefix_len
