@@ -80,18 +80,20 @@ class ForwardingTable:
 
     def lookup(self, ip):
         intf = None
+        dst_ip = None
         max_prefix = 0
         for entry in self.table:
             prefix = entry["ip"]
             mask = entry["mask"]
-            nxtHop = entry["nxtHop"]
             prefix_len = IPv4Network(f"192.168.0.0/{str(mask)}").prefixlen
             if (int(mask) & int(ip)) == (int(mask) & int(prefix)):
                 if prefix_len > max_prefix:
                     max_prefix = prefix_len
                     intf = entry["intfname"]
-
-        return intf
+                    dst_ip = entry["nxtHop"]
+        if intf == None:
+            print(f"Not found: {ip}")
+        return intf, dst_ip
 
 
 class UnfinishedArp:
@@ -146,28 +148,37 @@ class Router(object):
         print(f"[Src]: IP={src_ip} MAC={src_mac}")
         print(f"[Dst]: IP={dst_ip} MAC={dst_mac}")
 
-        intf_mac = self.ft.lookup(dst_ip)
+        intf_mac, nxtHop = self.ft.lookup(dst_ip)
         print(f"[Hit]: dst ip {dst_ip} goes to {intf_mac}")
-        ether = Ethernet()
-        ether.src = intf_mac
-        ether.dst = "ff:ff:ff:ff:ff:ff"
-        ether.ethertype = EtherType.ARP
-        arp = Arp(
-            operation=ArpOperation.Request,
-            senderhwaddr=intf_mac,
-            senderprotoaddr=self.mac2ip[intf_mac],
-            targethwaddr="ff:ff:ff:ff:ff:ff",
-            targetprotoaddr=dst_ip
-        )
-        arp_packet = ether + arp
-        self.send(self.mac2name[intf_mac], arp_packet)
-        self.queue.append(UnfinishedArp(
-            arp_packet,
-            packet,
-            dst_ip,
-            self.mac2name[intf_mac],
-            intf_mac
-        ))
+        if self.arp_table.has_ip(dst_ip):
+            eth = packet.get_header(Ethernet)
+            eth.dst = EthAddr(self.arp_table.ip2mac(dst_ip))
+            eth.src = EthAddr(intf_mac)
+            ipv4hdr = packet.get_header(IPv4)
+            ipv4hdr.ttl -= 1
+            icmp = packet.get_header(ICMP)
+            self.send(self.mac2name[intf_mac], eth + ipv4hdr + icmp)
+        else:
+            ether = Ethernet()
+            ether.src = intf_mac
+            ether.dst = "ff:ff:ff:ff:ff:ff"
+            ether.ethertype = EtherType.ARP
+            arp = Arp(
+                operation=ArpOperation.Request,
+                senderhwaddr=intf_mac,
+                senderprotoaddr=self.mac2ip[intf_mac],
+                targethwaddr="ff:ff:ff:ff:ff:ff",
+                targetprotoaddr=dst_ip
+            )
+            arp_packet = ether + arp
+            self.send(self.mac2name[intf_mac], arp_packet)
+            self.queue.append(UnfinishedArp(
+                arp_packet,
+                packet,
+                dst_ip,
+                self.mac2name[intf_mac],
+                intf_mac
+            ))
 
 
     def handle_arp(self, fromIntf, packet):
