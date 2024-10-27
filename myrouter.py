@@ -94,10 +94,31 @@ class ForwardingTable:
         return intf
 
 
+class UnfinishedArp:
+    def __init__(self, arp_packet, packet, query_ip, outIntf, outIntf_mac):
+        self.arp_packet = arp_packet
+        self.packet = packet
+        self.query_ip = query_ip
+        self.outIntf = outIntf
+        self.outIntf_mac = outIntf_mac
+
+    
+    def resolve(self, arp_reply):
+        eth = self.packet.get_header(Ethernet)
+        eth.dst = EthAddr(arp_reply.senderhwaddr)
+        eth.src = EthAddr(self.outIntf_mac)
+
+        ipv4hdr = self.packet.get_header(IPv4)
+        ipv4hdr.ttl -= 1
+
+        icmp = self.packet.get_header(ICMP)
+
+        return self.outIntf, eth + ipv4hdr + icmp
 
 
 class Router(object):
     def __init__(self, net: switchyard.llnetbase.LLNetBase):
+        self.queue = []
         self.net = net
         self.arp_table = Arp_table(self.net)
         self.ft = ForwardingTable(self.net)
@@ -117,7 +138,7 @@ class Router(object):
         self.net.send_packet(intf, packet)
 
     
-    def handle_none_arp_packet(self, fromIntf, packet):
+    def handle_none_arp(self, fromIntf, packet):
         ipv4 = packet.get_header(IPv4)
         eth = packet.get_header(Ethernet)
         src_mac, src_ip, dst_mac, dst_ip = eth.src, ipv4.src, eth.dst, ipv4.dst
@@ -139,13 +160,17 @@ class Router(object):
             targetprotoaddr=dst_ip
         )
         arp_packet = ether + arp
-        print(arp_packet)
         self.send(self.mac2name[intf_mac], arp_packet)
+        self.queue.append(UnfinishedArp(
+            arp_packet,
+            packet,
+            dst_ip,
+            self.mac2name[intf_mac],
+            intf_mac
+        ))
 
 
-
-
-    def handle_arp_packet(self, fromIntf, packet):
+    def handle_arp(self, fromIntf, packet):
         arp = packet.get_header(Arp)
         src_mac, src_ip, dst_mac, dst_ip = arp.senderhwaddr, arp.senderprotoaddr, arp.targethwaddr, arp.targetprotoaddr
 
@@ -163,26 +188,31 @@ class Router(object):
 
         self.arp_table.update_ip2mac(src_ip, src_mac)
 
-        if arp.operation == ArpOperation.Reply:
-            print(packet)
-            print("[Dropped]: this is arp reply")
-            return
-
-        print(f"[Hit]: {dst_mac} -> {self.arp_table.ip2mac(dst_ip)}")
-        dst_mac = self.arp_table.ip2mac(dst_ip)
-        self.send(fromIntf, create_ip_arp_reply(
-            dst_mac, src_mac,
-            dst_ip,  src_ip
-        ))
+        if arp.operation == ArpOperation.Request:
+            print(f"[Hit]: {dst_mac} -> {self.arp_table.ip2mac(dst_ip)}")
+            dst_mac = self.arp_table.ip2mac(dst_ip)
+            self.send(fromIntf, create_ip_arp_reply(
+                dst_mac, src_mac,
+                dst_ip,  src_ip
+            ))
+        elif arp.operation == ArpOperation.Reply:
+            for event in self.queue:
+                if event.query_ip == src_ip:
+                    outIntf, pkt = event.resolve(arp)
+                    self.send(outIntf, pkt)
+                    return
+        else:
+            print("Not arp request or reply!!!")
+            assert(0)
 
 
     def handle_packet(self, recv: switchyard.llnetbase.ReceivedPacket):
         timestamp, ifaceName, packet = recv
 
-        if not packet.has_header(Arp):
-            self.handle_none_arp_packet(ifaceName, packet)
+        if packet.has_header(Arp):
+            self.handle_arp(ifaceName, packet)
         else:
-            self.handle_arp_packet(ifaceName, packet)
+            self.handle_none_arp(ifaceName, packet)
 
 
     def start(self):
