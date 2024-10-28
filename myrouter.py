@@ -169,7 +169,7 @@ class Router(object):
         ipv4 = packet.get_header(IPv4)
         eth = packet.get_header(Ethernet)
         src_mac, src_ip, dst_mac, dst_ip = eth.src, ipv4.src, eth.dst, ipv4.dst
-        print(f"\n[Packet arrive]: {packet}")
+        print(f"\n[Packet arrive]: {packet}\n{packet.headers()}")
         print(f"[Src]: IP={src_ip} MAC={src_mac}")
         print(f"[Dst]: IP={dst_ip} MAC={dst_mac}")
 
@@ -266,7 +266,7 @@ class Router(object):
             print(f"[Err]: Unmatched src/dst mac in arp")
             return
 
-        print(f"\n[Packet arrive]: {packet}")
+        print(f"\n[Packet arrive]: {packet}\n{packet.headers()}")
         print(f"[Src]: IP={src_ip} MAC={src_mac}")
         print(f"[Dst]: IP={dst_ip} MAC={dst_mac}")
 
@@ -282,6 +282,10 @@ class Router(object):
             pass
         else:
             self.arp_table.update_ip2mac(src_ip, src_mac)
+
+        if "Vlan" in packet.headers():
+            print("[Dropped]: Vlan arp packet")
+            return
 
         if arp.operation == ArpOperation.Request:
             if dst_ip not in self.ips:
@@ -316,6 +320,12 @@ class Router(object):
 
         if packet.has_header(IPv6):
             return
+
+        if "UDP" in packet.headers():
+            hdr = packet.get_header(UDP)
+            if hdr.length < 8:
+                return
+            print(hdr)
 
         if packet.has_header(Arp):
             self.handle_arp(ifaceName, packet)
