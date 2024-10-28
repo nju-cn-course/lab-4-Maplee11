@@ -7,7 +7,6 @@ Basic IPv4 router (static routing) in Python.
 import time
 import switchyard
 from switchyard.lib.userlib import *
-from colorama import Fore, init
 
 
 class Arp_table:
@@ -103,7 +102,6 @@ class ForwardingTable:
                     print(entry)
         if intf == None:
             print(f"Not found: {ip}")
-        # if intf != None and dst_ip != None:
         print(f"[lookup]: {dst_ip} matches {max_prefix}")
         return intf, dst_ip
 
@@ -191,23 +189,6 @@ class Router(object):
             dst_ip = nxtHop
         print(f"[Forward]: dst ip {dst_ip} goes to {intf_mac}")
 
-        # if "ICMP" in packet.headers() and not self.arp_table.has_ip(dst_ip):
-        #     eth = packet.get_header(Ethernet)
-        #     eth.dst = EthAddr("ff:ff:ff:ff:ff:ff")
-        #     eth.src = EthAddr(intf_mac)
-        #     ipv4hdr = packet.get_header(IPv4)
-        #     ipv4hdr.ttl -= 1
-        #     hdrs = []
-        #     for hdr in packet.headers():
-        #         if hdr in ["Ethernet", "IPv4"]:
-        #             continue
-        #         hdrs.append(packet.get_header(hdr))
-        #     pkt = eth + ipv4hdr
-        #     for hdr in hdrs:
-        #         pkt += hdr
-        #     self.send(self.mac2name[intf_mac], pkt)
-        #     return
-
         if self.arp_table.has_ip(dst_ip):
             print(f"[Arp hit]: {dst_ip} 's mac is {self.arp_table.ip2mac(dst_ip)}")
             # assert(packet.headers() == ["Ethernet", "IPv4", "ICMP"])
@@ -226,11 +207,6 @@ class Router(object):
                 pkt += hdr
             self.send(self.mac2name[intf_mac], pkt)
         else:
-            # check if the arp request has been sent
-            # if any(event.query_ip == dst_ip for event in self.queue):
-            #     return
-            # ???
-            # assert(packet.headers() == ["Ethernet", "IPv4", "ICMP"])
             print(f"[Arp miss]: {dst_ip} not in arp")
             self.arp_table.show()
             ether = Ethernet()
@@ -245,9 +221,6 @@ class Router(object):
                 targetprotoaddr=dst_ip
             )
             arp_packet = ether + arp
-            # if dst_ip not in self.ipwl:
-            #     self.send(self.mac2name[intf_mac], arp_packet)
-            #     self.ipwl.append(dst_ip)
             self.queue.append(UnfinishedArp(
                 arp_packet,
                 packet,
@@ -262,8 +235,8 @@ class Router(object):
         src_mac, src_ip, dst_mac, dst_ip = arp.senderhwaddr, arp.senderprotoaddr, arp.targethwaddr, arp.targetprotoaddr
 
         eth = packet.get_header(Ethernet)
-        if eth.src != src_mac or eth.dst != dst_mac:
-            print(f"[Err]: Unmatched src/dst mac in arp")
+        if eth.src != src_mac or (eth.dst != dst_mac and(eth.dst != "ff:ff:ff:ff:ff:ff" and dst_mac != "00:00:00:00:00:00")):
+            print(f"[Err]: Unmatched src/dst mac in arp {eth.src} {src_mac} - {eth.dst} {dst_mac}")
             return
 
         print(f"\n[Packet arrive]: {packet}\n{packet.headers()}")
@@ -316,8 +289,6 @@ class Router(object):
     def handle_packet(self, recv: switchyard.llnetbase.ReceivedPacket):
         timestamp, ifaceName, packet = recv
 
-        # print(f"\nPacket: {packet}\n")
-
         if packet.has_header(IPv6):
             return
 
@@ -335,7 +306,6 @@ class Router(object):
 
     def process_queue(self):
         ipwl = set()
-        # print(f"Now is {time.time()}")
         for event in self.queue:
             print(f"{event.query_ip}  {event.query_cnt} {event.packet.headers()} TIME: {event.last_query}")
 
@@ -351,7 +321,7 @@ class Router(object):
         for event in self.queue:
             if event.last_query != 0 and time.time() - event.last_query <= 1:
                 ipwl.add(event.query_ip)
-        # print(ipwl)
+
         for event in self.queue:
             if event.query_ip in ipwl:
                 continue
@@ -388,6 +358,5 @@ def main(net):
     Main entry point for router.  Just create Router
     object and get it going.
     '''
-    # init(autoreset=True)
     router = Router(net)
     router.start()
