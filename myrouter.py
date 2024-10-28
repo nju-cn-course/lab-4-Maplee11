@@ -120,6 +120,7 @@ class UnfinishedArp:
 
     
     def resolve(self, arp_reply):
+        print(self.packet.headers())
         eth = self.packet.get_header(Ethernet)
         eth.dst = EthAddr(arp_reply.senderhwaddr)
         eth.src = EthAddr(self.outIntf_mac)
@@ -127,20 +128,21 @@ class UnfinishedArp:
         ipv4hdr = self.packet.get_header(IPv4)
         ipv4hdr.ttl -= 1
 
-        if self.packet.has_header(ICMP):
-            proto = self.packet.get_header(ICMP)
-        elif self.packet.has_header(UDP):
-            proto = self.packet.get_header(UDP)
-        else:
-            print("Unkonw proto")
-            assert(0)
+        hdrs = []
+        for hdr in self.packet.headers():
+            if hdr in ["Ethernet", "IPv4"]:
+                continue
+            hdrs.append(self.packet.get_header(hdr))
 
-        return self.outIntf, eth + ipv4hdr + proto
+        pkt = eth + ipv4hdr
+        for hdr in hdrs:
+            pkt += hdr
+        return self.outIntf, pkt
 
 
 class Router(object):
     def __init__(self, net: switchyard.llnetbase.LLNetBase):
-        self.queue = {}
+        self.queue = []
         self.net = net
         self.arp_table = Arp_table(self.net)
         self.ft = ForwardingTable(self.net)
@@ -158,6 +160,7 @@ class Router(object):
     def send(self, intf, packet):
         print(f"[Packet to be sent]: {packet}")
         self.net.send_packet(intf, packet)
+        print("*****Done*******")
 
     
     def handle_none_arp(self, fromIntf, packet):
@@ -186,6 +189,23 @@ class Router(object):
             dst_ip = nxtHop
         print(f"[Forward]: dst ip {dst_ip} goes to {intf_mac}")
 
+        # if "ICMP" in packet.headers() and not self.arp_table.has_ip(dst_ip):
+        #     eth = packet.get_header(Ethernet)
+        #     eth.dst = EthAddr("ff:ff:ff:ff:ff:ff")
+        #     eth.src = EthAddr(intf_mac)
+        #     ipv4hdr = packet.get_header(IPv4)
+        #     ipv4hdr.ttl -= 1
+        #     hdrs = []
+        #     for hdr in packet.headers():
+        #         if hdr in ["Ethernet", "IPv4"]:
+        #             continue
+        #         hdrs.append(packet.get_header(hdr))
+        #     pkt = eth + ipv4hdr
+        #     for hdr in hdrs:
+        #         pkt += hdr
+        #     self.send(self.mac2name[intf_mac], pkt)
+        #     return
+
         if self.arp_table.has_ip(dst_ip):
             print(f"[Arp hit]: {dst_ip} 's mac is {self.arp_table.ip2mac(dst_ip)}")
             # assert(packet.headers() == ["Ethernet", "IPv4", "ICMP"])
@@ -194,14 +214,15 @@ class Router(object):
             eth.src = EthAddr(intf_mac)
             ipv4hdr = packet.get_header(IPv4)
             ipv4hdr.ttl -= 1
-            if packet.has_header(ICMP):
-                proto = packet.get_header(ICMP)
-            elif packet.has_header(UDP):
-                proto = packet.get_header(UDP)
-            else:
-                print("Unkonw proto")
-                assert(0)
-            self.send(self.mac2name[intf_mac], eth + ipv4hdr + proto)
+            hdrs = []
+            for hdr in packet.headers():
+                if hdr in ["Ethernet", "IPv4"]:
+                    continue
+                hdrs.append(packet.get_header(hdr))
+            pkt = eth + ipv4hdr
+            for hdr in hdrs:
+                pkt += hdr
+            self.send(self.mac2name[intf_mac], pkt)
         else:
             # check if the arp request has been sent
             # if any(event.query_ip == dst_ip for event in self.queue):
@@ -225,31 +246,23 @@ class Router(object):
             # if dst_ip not in self.ipwl:
             #     self.send(self.mac2name[intf_mac], arp_packet)
             #     self.ipwl.append(dst_ip)
-            dst_ip = str(dst_ip)
-            if dst_ip not in self.queue:
-                self.queue[dst_ip]["evs"] = []
-                self.queue[dst_ip]["evs"].append(UnfinishedArp(
-                    arp_packet,
-                    packet,
-                    dst_ip,
-                    self.mac2name[intf_mac],
-                    intf_mac
-                ))
-                self.queue[dst_ip]["last"] = 0
-                self.queue[dst_ip]["cnt"] = 0
-            else:
-                self.queue[dst_ip]["evs"].append(UnfinishedArp(
-                    arp_packet,
-                    packet,
-                    dst_ip,
-                    self.mac2name[intf_mac],
-                    intf_mac
-                ))
+            self.queue.append(UnfinishedArp(
+                arp_packet,
+                packet,
+                dst_ip,
+                self.mac2name[intf_mac],
+                intf_mac
+            ))
 
 
     def handle_arp(self, fromIntf, packet):
         arp = packet.get_header(Arp)
         src_mac, src_ip, dst_mac, dst_ip = arp.senderhwaddr, arp.senderprotoaddr, arp.targethwaddr, arp.targetprotoaddr
+
+        eth = packet.get_header(Ethernet)
+        if eth.src != src_mac or eth.dst != dst_mac:
+            print(f"[Err]: Unmatched src/dst mac in arp")
+            return
 
         print(f"\n[Packet arrive]: {packet}")
         print(f"[Src]: IP={src_ip} MAC={src_mac}")
@@ -263,9 +276,13 @@ class Router(object):
             print("[Miss]: dst.ip is not in router's ports")
             return
 
-        self.arp_table.update_ip2mac(src_ip, src_mac)
+        if arp.operation == ArpOperation.Reply and src_mac == "ff:ff:ff:ff:ff:ff":
+            pass
+        else:
+            self.arp_table.update_ip2mac(src_ip, src_mac)
 
         if arp.operation == ArpOperation.Request:
+            
             print(f"[Hit-arp-request]: {dst_mac} -> {self.arp_table.ip2mac(dst_ip)}")
             dst_mac = self.arp_table.ip2mac(dst_ip)
             self.send(fromIntf, create_ip_arp_reply(
@@ -273,11 +290,16 @@ class Router(object):
                 dst_ip,  src_ip
             ))
         elif arp.operation == ArpOperation.Reply:
-            assert(str(src_ip) in self.queue)
-            for event in self.queue[str(src_ip)]["evs"]:
-                outIntf, pkt = event.resolve(arp)
-                self.send(outIntf, pkt)
-            # self.queue.pop(str(src_ip))
+            # ???????????????????
+            if src_mac == "ff:ff:ff:ff:ff:ff":
+                return
+            # for event in self.queue:
+            #     print(event.query_ip, event.packet)
+            for event in self.queue[:]:
+                if event.query_ip == src_ip:
+                    outIntf, pkt = event.resolve(arp)
+                    self.send(outIntf, pkt)
+                    self.queue.remove(event)
         else:
             print("Not arp request or reply!!!")
             assert(0)
@@ -298,24 +320,32 @@ class Router(object):
 
 
     def process_queue(self):
-        for ip, dic in self.queue.items():
-            if dic["last"] == 0:
-                dic["last"] = time.time()
-                dic["cnt"] += 1
-                event = dic["evs"][0]
-                self.send(event.outIntf, event.arp_packet)
-                self.queue[ip] = dic
-            elif time.time() - dic["last"] <= 1:
+        ipwl = set()
+        # print(f"Now is {time.time()}")
+        for event in self.queue:
+            print(f"{event.query_ip}  {event.query_cnt} {event.packet.headers()} TIME: {event.last_query}")
+
+        dead = set()
+        for event in self.queue:
+            if event.query_cnt >= 5 and time.time() - event.last_query > 1:
+                dead.add(event.query_ip)
+        for ip in dead:
+            for ev in self.queue[:]:
+                if ev.query_ip == ip:
+                    self.queue.remove(ev)
+
+        for event in self.queue:
+            if event.last_query != 0 and time.time() - event.last_query <= 1:
+                ipwl.add(event.query_ip)
+        # print(ipwl)
+        for event in self.queue:
+            if event.query_ip in ipwl:
                 continue
-            elif dic["cnt"] >= 5:
-                # self.queue.pop(ip)
-                continue
-            else:
-                dic["last"] = time.time()
-                dic["cnt"] += 1
-                event = dic["evs"][0]
-                self.send(event.outIntf, event.arp_packet)
-                self.queue[ip] = dic
+            print(f"--------Request {event.query_ip}  at  {time.time()}-----------")
+            self.send(event.outIntf, event.arp_packet)
+            event.last_query = time.time()
+            event.query_cnt += 1
+            ipwl.add(event.query_ip)
 
 
     def start(self):
@@ -330,7 +360,6 @@ class Router(object):
                 continue
             except Shutdown:
                 break
-
             self.handle_packet(recv)
 
         self.stop()

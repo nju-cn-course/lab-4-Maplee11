@@ -13,3 +13,4 @@ tmp/
 syenv/
 # vscode
 .vscode/
+output.txt
