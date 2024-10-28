@@ -271,7 +271,6 @@ class Router(object):
                 dst_ip,  src_ip
             ))
         elif arp.operation == ArpOperation.Reply:
-            # ???????????????????
             if src_mac == "ff:ff:ff:ff:ff:ff":
                 return
             # for event in self.queue:
