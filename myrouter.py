@@ -150,11 +150,13 @@ class Router(object):
         self.intf_ips  = []
         self.mac2ip = {}
         self.mac2name = {}
+        self.ips = []
         for intf in net.interfaces():
             self.intf_macs.append(intf.ethaddr)
             self.intf_ips.append(intf.ipaddr)
             self.mac2ip[intf.ethaddr] = intf.ipaddr
             self.mac2name[intf.ethaddr] = intf.name
+            self.ips.append(intf.ipaddr)
 
 
     def send(self, intf, packet):
@@ -282,7 +284,9 @@ class Router(object):
             self.arp_table.update_ip2mac(src_ip, src_mac)
 
         if arp.operation == ArpOperation.Request:
-            
+            if dst_ip not in self.ips:
+                print(f"Can't reply for {dst_ip}")
+                return
             print(f"[Hit-arp-request]: {dst_mac} -> {self.arp_table.ip2mac(dst_ip)}")
             dst_mac = self.arp_table.ip2mac(dst_ip)
             self.send(fromIntf, create_ip_arp_reply(
